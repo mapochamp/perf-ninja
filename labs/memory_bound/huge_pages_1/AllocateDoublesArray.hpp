@@ -152,19 +152,20 @@ inline bool setRequiredPrivileges() {
 // Allocate an array of doubles of size `size`, return it as a
 // std::unique_ptr<double[], D>, where `D` is a custom deleter type
 inline auto allocateDoublesArray(size_t size) {
-  // Allocate memory
-  double *alloc = new double[size];
-  // remember to cast the pointer to double* if your allocator returns void*
+  size *= sizeof(double);
 
-  // Deleters can be conveniently defined as lambdas, but you can explicitly
-  // define a class if you're not comfortable with the syntax
-  auto deleter = [/* state = ... */](double *ptr) { delete[] ptr; };
+  // Allocate full pages
+  constexpr size_t page_size = 1ul << 21; // 2MB
+  const auto pages_to_alloc = size / page_size + (size % page_size != 0);
+  size = pages_to_alloc * page_size;
 
-  return std::unique_ptr<double[], decltype(deleter)>(alloc,
-                                                      std::move(deleter));
+  const auto alloc = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                          MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB, -1, 0);
+  if (alloc == MAP_FAILED)
+    throw std::bad_alloc{};
 
-  // The above is equivalent to:
-  // return std::make_unique<double[]>(size);
-  // The more verbose version is meant to demonstrate the use of a custom
-  // (potentially stateful) deleter
+  auto deleter = [s = size](double *addr) { munmap(addr, s); };
+
+  return std::unique_ptr<double[], decltype(deleter)>(
+      static_cast<double *>(alloc), deleter);
 }
